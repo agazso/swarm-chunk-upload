@@ -11,6 +11,7 @@
   "license": "ISC",
   "dependencies": {
     "@ethersphere/bee-js": "^5.0.0",
+    "cafe-utility": "^4.2.0",
     "swarm-chunked-upload": "^1.0.0"
   }
 }

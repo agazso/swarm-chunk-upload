@@ -1,6 +1,7 @@
 const { uploadChunked } = require('swarm-chunked-upload')
 const fs = require('fs')
 const { Bee } = require('@ethersphere/bee-js')
+const { Promises } = require('cafe-utility')
 
 const chunkSize = 4096
 const dataDir = 'data'
@@ -68,33 +69,38 @@ async function upload() {
 }
 
 async function check() {
+    const concurrency = 10
+    const queue = Promises.makeAsyncQueue(concurrency)
     const bee = new Bee(beeUrl)
     const dir = fs.readdirSync(dataDir)
     let succesCount = 0
     let errorCount = 0
     const numChunks = dir.length
     for (const item of dir) {
-        try {
-            const isRetrievable = await bee.isReferenceRetrievable(item)
-            if (!isRetrievable) {
-                throw e
-            }
-            const swarmData = await bee.downloadChunk(item)
-            const fileData = fs.readFileSync(`${dataDir}/${item}`)
-            if (bytesEqual(swarmData.slice(8), fileData)) {
-                succesCount++
-            } else {
-                console.error(`content error: ${item}`)
-                console.debug({swarmData, fileData})
+        queue.enqueue(async () => {
+            try {
+                const isRetrievable = await bee.isReferenceRetrievable(item)
+                if (!isRetrievable) {
+                    throw e
+                }
+                const swarmData = await bee.downloadChunk(item)
+                const fileData = fs.readFileSync(`${dataDir}/${item}`)
+                if (bytesEqual(swarmData.slice(8), fileData)) {
+                    succesCount++
+                } else {
+                    console.error(`content error: ${item}`)
+                    console.debug({swarmData, fileData})
+                    errorCount++
+                }
+            } catch (e) {
+                console.error(`retrieve error: ${item}`)
                 errorCount++
             }
-        } catch (e) {
-            console.error(`retrieve error: ${item}`)
-            errorCount++
-        }
 
-        write(`chunks: ${numChunks}, success: ${succesCount}, error: ${errorCount}\r`)
+            write(`chunks: ${numChunks}, success: ${succesCount}, error: ${errorCount}\r`)
+        })
     }
+    await queue.drain()
 }
 
 function bytesEqual(a, b) {
