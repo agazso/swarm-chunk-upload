@@ -135,13 +135,6 @@ export async function upload(fileOrDir: string, options: Options): Promise<Refer
     return manifestReference
 }
 
-export async function uploadChunked(bytes: Uint8Array, options: Options): Promise<Result> {
-    const context = makeContext(options)
-    const rootChunkAddress = await splitAndUploadChunks(bytes, context)
-    const bzzReference = await createManifest(rootChunkAddress, context)
-    return { rootChunkAddress, bzzReference, context }
-}
-
 interface Queue {
     enqueue(fn: () => Promise<void>): void;
 }
@@ -158,50 +151,6 @@ function splitAndEnqueueChunks(bytes: Uint8Array, queue: Queue, context: Context
         }
     }
     return chunkedFile.address()
-}
-
-async function splitAndUploadChunks(bytes: Uint8Array, context: Context): Promise<ChunkAddress> {
-    const queue = Promises.makeAsyncQueue(context.parallelism)
-    const chunkedFile = makeChunkedFile(bytes)
-    const levels = chunkedFile.bmt()
-    for (const level of levels) {
-        for (const chunk of level) {
-            queue.enqueue(async () => {
-                await uploadChunkWithRetries(chunk, context)
-                await context.onSuccessfulChunkUpload(chunk, context)
-            })
-        }
-    }
-    await queue.drain()
-    return chunkedFile.address()
-}
-
-async function createManifest(address: ChunkAddress, context: Context): Promise<Reference> {
-    const node = new MantarayNode()
-    node.addFork(encodePath(`/${context.filename}`), address, {
-        'Content-Type': context.contentType,
-        Filename: context.filename
-    })
-    node.addFork(encodePath('/'), new Uint8Array(32) as Reference, {
-        'website-index-document': `/${context.filename}`
-    })
-    const reference = await node.save(async data => {
-        const result = await uploadDataWithRetries(data, context)
-        return fromHexString(result.reference) as Reference
-    })
-    return reference
-}
-
-async function uploadDataWithRetries(data: Uint8Array, context: Context): Promise<{ reference: string }> {
-    let lastError = null
-    for (let attempts = 0; attempts < context.retries; attempts++) {
-        try {
-            return await context.bee.uploadData(context.stamp, data)
-        } catch (error) {
-            lastError = error
-        }
-    }
-    throw lastError
 }
 
 async function uploadChunkWithRetries(chunk: Chunk, context: Context) {
