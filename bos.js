@@ -8,6 +8,7 @@ const chunkSize = 4096
 const dataDir = 'data'
 const beeUrl = 'http://127.0.0.1:1633'
 const errorFile = 'errors.json'
+const defaultFilename = 'The-Book-of-Swarm.pdf'
 
 main()
 
@@ -41,8 +42,15 @@ async function main() {
     }
 }
 
-async function upload() {
-    const filename = 'The-Book-of-Swarm.pdf'
+function ensureDataDir() {
+    try {
+        fs.mkdirSync(dataDir)
+    } catch (e) {
+    }
+}
+
+async function upload(filename = defaultFilename) {
+    ensureDataDir()
     const data = fs.readFileSync(filename)
     const numChunks = calculateNumberOfChunks(data.length)
     const dataDir = 'data'
