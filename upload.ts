@@ -1,7 +1,12 @@
 /*
  * TODO
- * [ ] cannot upload zero byte files
- *
+ * - [ ] cannot upload zero byte files
+ *   - https://github.com/fairDataSociety/bmt-js/issues/17
+ *   - added workaround (uploadEmptyChunk)
+ * - [ ] deferred upload gets stuck in Bee dev mode
+ *   - https://github.com/ethersphere/bee/issues/3227
+ * - [ ] mantaray-js misses padding with metadata
+ *   - https://github.com/ethersphere/mantaray-js/issues/35
  */
 
 import { Bee } from '@ethersphere/bee-js'
@@ -11,6 +16,10 @@ import { MantarayNode, Reference } from 'mantaray-js'
 import { TextEncoder } from 'util'
 import { statSync, promises, readFileSync  } from 'fs'
 import { join, basename } from 'path'
+
+const EMPTY_CHUNK_ADDRESS = 'b34ca8c22b9e982354f9c7f50b470d66db428d880c8a904d5fe4ec9713171526'
+const beeUrl = 'http://127.0.0.1:1633'
+const stamp = process.env.STAMP || '0000000000000000000000000000000000000000000000000000000000000000'
 
 type Options = {
     beeUrl: string
@@ -23,12 +32,6 @@ type Options = {
 }
 
 type Context = Required<Options> & { bee: Bee }
-
-type Result = {
-    rootChunkAddress: ChunkAddress
-    bzzReference: Reference
-    context: Context
-}
 
 const noop = () => Promise.resolve()
 
@@ -99,8 +102,8 @@ export async function upload(fileOrDir: string, options: Options): Promise<Refer
         const reference = splitAndEnqueueChunks(fileData, queue, context)
         const filename = basename(file)
         const mimeType = detectMime(filename)
-        const contentType = mimeType ? { 'Content-Type': mimeType } : undefined
-        // console.log({ file, remotePath, fileOrDir, path, filename })
+        const contentType = { 'Content-Type': mimeType }
+
         node.addFork(new TextEncoder().encode(file), reference, {
             ...contentType,
             Filename: filename
@@ -126,6 +129,12 @@ interface Queue {
 }
 
 function splitAndEnqueueChunks(bytes: Uint8Array, queue: Queue, context: Context): ChunkAddress {
+    if (bytes.length === 0) {
+        queue.enqueue(async () => {
+            await uploadEmptyChunk(context)
+        })
+        return fromHexString(EMPTY_CHUNK_ADDRESS) as ChunkAddress
+    }
     const chunkedFile = makeChunkedFile(bytes)
     const levels = chunkedFile.bmt()
     for (const level of levels) {
@@ -150,6 +159,21 @@ async function uploadChunkWithRetries(chunk: Chunk, context: Context) {
         }
     }
     throw lastError
+}
+
+async function uploadEmptyChunk(context: Context) {
+    const expectedReference = EMPTY_CHUNK_ADDRESS
+    const actualReference = await context.bee.uploadChunk(
+        context.stamp,
+        new Uint8Array(8),
+        {
+            deferred: context.deferred
+        }
+    )
+    if (actualReference !== expectedReference) {
+        throw Error(`Expected ${expectedReference} but got ${actualReference}`)
+    }
+    return actualReference
 }
 
 async function uploadChunk(chunk: Chunk, context: Context) {
@@ -196,7 +220,7 @@ function toHexString(bytes: Uint8Array): string {
     return bytes.reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), '')
 }
 
-function detectMime(filename: string): string | undefined {
+function detectMime(filename: string): string {
     const extension = Strings.getExtension(filename)
     return (
         {
@@ -272,17 +296,15 @@ function detectMime(filename: string): string | undefined {
             '3gp': 'video/3gpp',
             '3gp2': 'video/3gpp2',
             '7z': 'application/x-7z-compressed'
-        }[extension] || undefined
+        }[extension] || ''
     )
 }
 
 async function main() {
-    const beeUrl = 'http://127.0.0.1:1633'
-
     const ref = await upload(process.argv[2], {
-        stamp: process.env.STAMP || '0000000000000000000000000000000000000000000000000000000000000000',
+        stamp,
         beeUrl,
-        deferred: false,
+        deferred: true,
         retries: 1,
         onSuccessfulChunkUpload: async (chunk, context) => {
             console.log('✅', `${context.beeUrl}/chunks/${toHexString(chunk.address())}`)
@@ -295,4 +317,4 @@ async function main() {
     console.log('✅', `manifest: ${beeUrl}/bzz/${toHexString(ref)}`)
 }
 
-main()
+main().catch(console.error)
