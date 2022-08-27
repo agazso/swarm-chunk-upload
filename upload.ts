@@ -13,12 +13,10 @@ import { statSync, promises, readFileSync  } from 'fs'
 import { join, basename } from 'path'
 
 type Options = {
-    filename: string
     beeUrl: string
     stamp: string
     deferred?: boolean
     parallelism?: number
-    contentType?: string
     retries?: number
     onSuccessfulChunkUpload?: (chunk: Chunk, context: Context) => Promise<void>
     onFailedChunkUpload?: (chunk: Chunk, context: Context) => Promise<void>
@@ -183,13 +181,11 @@ async function uploadChunk(chunk: Chunk, context: Context) {
 
 function makeContext(options: Options): Context {
     return {
-        filename: options.filename,
         beeUrl: options.beeUrl,
         stamp: options.stamp,
         bee: new Bee(options.beeUrl),
         deferred: options.deferred ?? true,
         parallelism: options.parallelism ?? 8,
-        contentType: options.contentType ?? detectMime(options.filename),
         retries: options.retries ?? 5,
         onSuccessfulChunkUpload: options.onSuccessfulChunkUpload ?? noop,
         onFailedChunkUpload: options.onFailedChunkUpload ?? noop
@@ -212,7 +208,7 @@ function toHexString(bytes: Uint8Array): string {
     return bytes.reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), '')
 }
 
-function detectMime(filename: string): string {
+function detectMime(filename: string): string | undefined {
     const extension = Strings.getExtension(filename)
     return (
         {
@@ -288,7 +284,7 @@ function detectMime(filename: string): string {
             '3gp': 'video/3gpp',
             '3gp2': 'video/3gpp2',
             '7z': 'application/x-7z-compressed'
-        }[extension] || ''
+        }[extension] || undefined
     )
 }
 
@@ -296,7 +292,6 @@ async function main() {
     const beeUrl = 'http://127.0.0.1:1633'
 
     const ref = await upload(process.argv[2], {
-        filename: '',
         stamp: process.env.STAMP || '0000000000000000000000000000000000000000000000000000000000000000',
         beeUrl,
         deferred: false,
