@@ -85,12 +85,6 @@ async function getFiles(path: string): Promise<string[]> {
     } else {
       return [path]
     }
-  }
-
-function getForkPath(prefix: string | null, file: string): string {
-    const name = file
-
-    return prefix ? join(prefix, name) : name
 }
 
 export async function upload(fileOrDir: string, options: Options): Promise<Reference> {
@@ -103,25 +97,19 @@ export async function upload(fileOrDir: string, options: Options): Promise<Refer
         const path = stat.isDirectory() ? join(fileOrDir, file) : fileOrDir
         const fileData = readFileSync(path)
         const reference = splitAndEnqueueChunks(fileData, queue, context)
-
-        const remotePath = getForkPath(null, file)
-        const filename = basename(remotePath)
+        const filename = basename(file)
         const mimeType = detectMime(filename)
         const contentType = mimeType ? { 'Content-Type': mimeType } : undefined
         // console.log({ file, remotePath, fileOrDir, path, filename })
-        node.addFork(new TextEncoder().encode(remotePath), reference, {
+        node.addFork(new TextEncoder().encode(file), reference, {
             ...contentType,
             Filename: filename
         })
 
-        if (file === remotePath) {
-            console.log(toHexString(reference) + ' ' + file)
-        } else {
-            console.log(toHexString(reference) + ' ' + file + ' -> ' + remotePath)
-        }
-        if (remotePath === 'index.html') {
+        console.log(toHexString(reference) + ' ' + file)
+        if (file === 'index.html') {
             node.addFork(encodePath('/'), new Uint8Array(32) as Reference, {
-                'website-index-document': remotePath,
+                'website-index-document': file,
             })
         }
     }
