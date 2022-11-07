@@ -10,11 +10,11 @@
  */
 
 import { Bee } from '@ethersphere/bee-js'
-import { Chunk, ChunkAddress, makeChunkedFile } from '@fairdatasociety/bmt-js'
-import { Promises, Strings } from 'cafe-utility'
+import { Chunk, ChunkAddress, makeChunk, makeChunkedFile } from '@fairdatasociety/bmt-js'
+import { Promises, Strings, Files } from 'cafe-utility'
 import { MantarayNode, Reference } from 'mantaray-js'
 import { TextEncoder } from 'util'
-import { statSync, promises, readFileSync  } from 'fs'
+import { statSync, promises, writeFileSync, createReadStream, ReadStream } from 'fs'
 import { join, basename } from 'path'
 
 const EMPTY_CHUNK_ADDRESS = 'b34ca8c22b9e982354f9c7f50b470d66db428d880c8a904d5fe4ec9713171526'
@@ -27,6 +27,7 @@ type Options = {
     deferred?: boolean
     parallelism?: number
     retries?: number
+    writeFiles?: boolean
     onSuccessfulChunkUpload?: (chunk: Chunk, context: Context) => Promise<void>
     onFailedChunkUpload?: (chunk: Chunk, context: Context) => Promise<void>
 }
@@ -98,18 +99,17 @@ export async function upload(fileOrDir: string, options: Options): Promise<Refer
     const node = new MantarayNode()
     for (const file of files) {
         const path = stat.isDirectory() ? join(fileOrDir, file) : fileOrDir
-        const fileData = readFileSync(path)
-        const reference = splitAndEnqueueChunks(fileData, queue, context)
+        const reference = await splitAndEnqueueFileChunks(path, queue, context)
         const filename = basename(file)
         const mimeType = detectMime(filename)
         const contentType = { 'Content-Type': mimeType }
 
         node.addFork(new TextEncoder().encode(file), reference, {
             ...contentType,
-            Filename: filename
+            Filename: filename,
         })
 
-        console.log(toHexString(reference) + ' ' + file)
+        console.log(toHexString(reference) + ' ' + filename)
         if (file === 'index.html') {
             node.addFork(encodePath('/'), new Uint8Array(32) as Reference, {
                 'website-index-document': file,
@@ -128,13 +128,95 @@ interface Queue {
     enqueue(fn: () => Promise<void>): void;
 }
 
-function splitAndEnqueueChunks(bytes: Uint8Array, queue: Queue, context: Context): ChunkAddress {
-    if (bytes.length === 0) {
-        queue.enqueue(async () => {
-            await uploadEmptyChunk(context)
-        })
-        return fromHexString(EMPTY_CHUNK_ADDRESS) as ChunkAddress
+function getSpanValue(span: Uint8Array): bigint {
+    const dataView = new DataView(span.buffer)
+  
+    return dataView.getBigUint64(0, true)
+}
+
+const CHUNK_PAYLOAD_SIZE = 4096
+
+function makeNextLevelChunks(intermediateChunks: Chunk[]): Chunk[] {
+    const parentChunks: Chunk[] = []
+    let parentChunkPayload = new Uint8Array(CHUNK_PAYLOAD_SIZE)
+    let offset = 0
+    let size = BigInt(0)
+    
+    for (let i = 0; i < intermediateChunks.length; i++) {
+        const chunk = intermediateChunks[i]
+        const address = chunk.address()        
+        parentChunkPayload.set(address, offset)
+        offset += address.length
+        size += getSpanValue(chunk.span())
+
+        if (offset === CHUNK_PAYLOAD_SIZE || i === intermediateChunks.length - 1) {
+            console.debug('next level chunks', { i })
+            const parentChunk = makeChunk(parentChunkPayload, { startingSpanValue: size })
+            parentChunks.push(parentChunk)
+            parentChunkPayload.fill(0)
+            offset = 0
+            size = BigInt(0)
+        }
     }
+
+    return parentChunks
+}
+
+async function streamedChunker(read: (size: number) => Promise<Uint8Array | null>, onChunk: (chunk: Chunk) => Promise<void>): Promise<ChunkAddress> {
+    let intermediateChunks: Chunk[] = []
+    let intermediateChunkPayload = new Uint8Array(CHUNK_PAYLOAD_SIZE)
+    let offset = 0
+    let size = 0
+    
+    while (true) {
+        const payload = await read(CHUNK_PAYLOAD_SIZE)
+        if (payload == null) {
+            const intermediateChunk = makeChunk(intermediateChunkPayload, { startingSpanValue: size })
+            intermediateChunks.push(intermediateChunk)
+            break
+        }
+
+        const chunk = makeChunk(payload)
+        await onChunk(chunk)
+
+        const address = chunk.address()        
+        intermediateChunkPayload.set(address, offset)
+        offset += address.length
+        size += payload.length
+
+        if (offset === CHUNK_PAYLOAD_SIZE) {
+            const intermediateChunk = makeChunk(intermediateChunkPayload, { startingSpanValue: size })
+            intermediateChunks.push(intermediateChunk)
+            intermediateChunkPayload.fill(0)
+            offset = 0
+            size = 0
+        }
+    }
+
+
+    while (true) {
+        console.debug({ intermediateChunks })
+
+        for (const chunk of intermediateChunks) {
+            await onChunk(chunk)
+        }
+
+        if (intermediateChunks.length === 1) {
+            const rootChunk = intermediateChunks[0]
+            return rootChunk.address()
+        }
+
+        intermediateChunks = makeNextLevelChunks(intermediateChunks)
+    }
+}
+
+function splitAndEnqueueChunks(bytes: Uint8Array, queue: Queue, context: Context): ChunkAddress {
+    // if (bytes.length === 0) {
+    //     queue.enqueue(async () => {
+    //         await uploadEmptyChunk(context)
+    //     })
+    //     return fromHexString(EMPTY_CHUNK_ADDRESS) as ChunkAddress
+    // }
     const chunkedFile = makeChunkedFile(bytes)
     const levels = chunkedFile.bmt()
     for (const level of levels) {
@@ -146,6 +228,92 @@ function splitAndEnqueueChunks(bytes: Uint8Array, queue: Queue, context: Context
         }
     }
     return chunkedFile.address()
+}
+
+function calculateNumberOfChunks(size: number): number {
+    let numChunks = 0
+
+    const numLeafChunks = Math.ceil(size / 4096)
+    numChunks += numLeafChunks
+
+    let numIntermediateChunks = numLeafChunks
+    while (numIntermediateChunks > 128) {
+        const numParentChunks = Math.ceil(numIntermediateChunks / 128)
+        numChunks += numParentChunks
+        numIntermediateChunks = numParentChunks
+    }
+
+    numChunks += 1 // root chunk
+
+    return numChunks
+}
+
+async function waitReadStreamEvent(readStream: ReadStream, event: 'ready' | 'readable'): Promise<void> {
+    return new Promise(resolve => {
+        function listener() {
+            readStream.removeListener(event, listener)
+            resolve()
+        }
+        readStream.addListener(event, listener)
+    })
+}
+
+async function writeFileChunk(dataDir: string, path: string, chunk: Chunk) {
+    const chunkFileDir = join(dataDir, path)
+    await Files.mkdirp(chunkFileDir)
+    const chunkFileName = toHexString(chunk.address())
+    const content = Uint8Array.from([...chunk.span(), ...chunk.payload])
+    writeFileSync(join(chunkFileDir, chunkFileName), content)
+}
+
+function log(...msg: any[]) {
+    const output = msg.map(s => s.toString()).join('')
+    process.stdout.write(output)
+}
+
+async function splitAndEnqueueFileChunks(path: string, queue: Queue, context: Context): Promise<ChunkAddress> {
+    const stats = statSync(path)
+    const size = stats.size
+    const numChunks = calculateNumberOfChunks(size)
+
+    const readStream = createReadStream(path, { highWaterMark: CHUNK_PAYLOAD_SIZE })
+    await waitReadStreamEvent(readStream, 'ready')
+
+    const read = async (size: number) => {
+        await waitReadStreamEvent(readStream, 'readable')
+        return readStream.read(size)
+    }
+
+    let numQueued = 0
+    let numUploadedChunks = 0
+    const listeners: ((_: unknown) => void)[] = []
+    const chunkAddress = await streamedChunker(read, async (chunk: Chunk) => {
+        numQueued++
+        if (numQueued > context.parallelism) {
+            await new Promise(resolve => listeners.push(resolve))
+        }
+        queue.enqueue(async () => {
+            await uploadChunkWithRetries(chunk, context)
+            await context.onSuccessfulChunkUpload(chunk, context)
+
+            numQueued--
+            if (numQueued <= context.parallelism) {
+                const listener = listeners.shift()
+                if (listener) {
+                    listener(undefined)
+                }
+            }
+
+            if (context.writeFiles) {
+                await writeFileChunk('./chunk-data', path, chunk)
+            }
+
+            numUploadedChunks++
+            log(`uploaded chunks ${numUploadedChunks} / ${numChunks}, ${Math.ceil(numUploadedChunks / numChunks * 100.0)}%\r`)
+        })
+    })
+
+    return chunkAddress
 }
 
 async function uploadChunkWithRetries(chunk: Chunk, context: Context) {
@@ -199,6 +367,7 @@ function makeContext(options: Options): Context {
         deferred: options.deferred ?? true,
         parallelism: options.parallelism ?? 8,
         retries: options.retries ?? 5,
+        writeFiles: options.writeFiles ?? false,
         onSuccessfulChunkUpload: options.onSuccessfulChunkUpload ?? noop,
         onFailedChunkUpload: options.onFailedChunkUpload ?? noop
     }
@@ -244,7 +413,8 @@ function detectMime(filename: string): string {
             htm: 'text/html',
             html: 'text/html; charset=utf-8',
             ico: 'image/x-icon',
-            ics: 'text/calendar',
+            // ics: 'text/calendar',
+            ics: '',
             jar: 'application/java-archive',
             jpeg: 'image/jpeg',
             jpg: 'image/jpeg',
@@ -306,8 +476,10 @@ async function main() {
         beeUrl,
         deferred: true,
         retries: 1,
+        parallelism: 50,
+        writeFiles: true,
         onSuccessfulChunkUpload: async (chunk, context) => {
-            console.log('✅', `${context.beeUrl}/chunks/${toHexString(chunk.address())}`)
+            // console.log('✅', `${context.beeUrl}/chunks/${toHexString(chunk.address())}`)
         },
         onFailedChunkUpload: async (chunk, context) => {
             console.error('❌', `${context.beeUrl}/chunks/${toHexString(chunk.address())}`)
