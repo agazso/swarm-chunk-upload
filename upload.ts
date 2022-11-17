@@ -150,7 +150,6 @@ function makeNextLevelChunks(intermediateChunks: Chunk[]): Chunk[] {
         size += getSpanValue(chunk.span())
 
         if (offset === CHUNK_PAYLOAD_SIZE || i === intermediateChunks.length - 1) {
-            console.debug('next level chunks', { i })
             const parentChunk = makeChunk(parentChunkPayload, { startingSpanValue: size })
             parentChunks.push(parentChunk)
             parentChunkPayload.fill(0)
@@ -195,8 +194,6 @@ async function streamedChunker(read: (size: number) => Promise<Uint8Array | null
 
 
     while (true) {
-        console.debug({ intermediateChunks })
-
         for (const chunk of intermediateChunks) {
             await onChunk(chunk)
         }
@@ -286,6 +283,7 @@ async function splitAndEnqueueFileChunks(path: string, queue: Queue, context: Co
 
     let numQueued = 0
     let numUploadedChunks = 0
+    const startTime = Date.now()
     const listeners: ((_: unknown) => void)[] = []
     const chunkAddress = await streamedChunker(read, async (chunk: Chunk) => {
         numQueued++
@@ -309,7 +307,10 @@ async function splitAndEnqueueFileChunks(path: string, queue: Queue, context: Co
             }
 
             numUploadedChunks++
-            log(`uploaded chunks ${numUploadedChunks} / ${numChunks}, ${Math.ceil(numUploadedChunks / numChunks * 100.0)}%\r`)
+
+            const elapsedTime = Date.now() - startTime
+            const kbps = Math.floor((numUploadedChunks * 4096) / (elapsedTime / 1000.0) / 1024)
+            log(`uploaded chunks ${numUploadedChunks} / ${numChunks}, ${Math.ceil(numUploadedChunks / numChunks * 100.0)}%, ${kbps} kB/s\r`)
         })
     })
 
