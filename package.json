@@ -12,10 +12,10 @@
   "license": "ISC",
   "dependencies": {
     "@ethersphere/bee-js": "^5.0.0",
-    "@fairdatasociety/bmt-js": "file:../../bmt-js",
+    "@fairdatasociety/bmt-js": "agazso/bmt-js#feat/allow-bigger-spans",
     "axios": "^0.27.2",
     "cafe-utility": "^4.2.0",
-    "mantaray-js": "file:../../mantaray-js",
+    "mantaray-js": "ethersphere/mantaray-js#5a51dff4",
     "swarm-chunked-upload": "^1.0.0",
     "ts-node": "^10.9.1"
   }
