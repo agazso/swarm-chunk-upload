@@ -309,8 +309,14 @@ async function splitAndEnqueueFileChunks(path: string, queue: Queue, context: Co
             numUploadedChunks++
 
             const elapsedTime = Date.now() - startTime
-            const kbps = Math.floor((numUploadedChunks * 4096) / (elapsedTime / 1000.0) / 1024)
-            log(`uploaded chunks ${numUploadedChunks} / ${numChunks}, ${Math.ceil(numUploadedChunks / numChunks * 100.0)}%, ${kbps} kB/s\r`)
+            const uploadedKBs = (numUploadedChunks * 4096) / 1024
+            const kbps = Math.floor(uploadedKBs / (elapsedTime / 1000.0))
+            const total = uploadedKBs > 1024 ? `${Math.floor(uploadedKBs / 1024)} MB` : `${uploadedKBs} KB`
+            const percentage = Math.ceil(numUploadedChunks / numChunks * 100.0)
+            const makePad = (n: number, padding: string = ' ') => new Array(n).fill(padding).join('')
+            const pad = (s: string, num: number) => s.length <= num ? makePad(num - s.length) + s : s
+            const padNum = (n: number, num: number) => pad(n.toString(), num)
+            log(` ${pad(percentage.toString(), 2)}%  uploaded chunks ${padNum(numUploadedChunks, (numChunks.toString().length))} / ${numChunks}, total: ${pad(total, 6)}, ${pad(kbps.toString(), 8)} kB/s                \r`)
         })
     })
 
