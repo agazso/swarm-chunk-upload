@@ -109,12 +109,18 @@ export async function upload(fileOrDir: string, options: Options): Promise<Refer
             Filename: filename,
         })
 
-        console.log(toHexString(reference) + ' ' + filename)
-        if (file === 'index.html') {
+        if (files.length === 1) {
             node.addFork(encodePath('/'), new Uint8Array(32) as Reference, {
                 'website-index-document': file,
             })
         }
+        else if (file === 'index.html') {
+            node.addFork(encodePath('/'), new Uint8Array(32) as Reference, {
+                'website-index-document': file,
+            })
+        }
+
+        console.log(toHexString(reference) + ' ' + file)
     }
     const storageSaver = async (data: Uint8Array) => splitAndEnqueueChunks(data, queue, context)
     const manifestReference = await node.save(storageSaver)
