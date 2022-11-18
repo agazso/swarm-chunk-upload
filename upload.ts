@@ -10,7 +10,7 @@
  */
 
 import { Bee } from '@ethersphere/bee-js'
-import { Chunk, ChunkAddress, makeChunk, makeChunkedFile } from '@fairdatasociety/bmt-js'
+import { Chunk, ChunkAddress, getSpanValue, makeChunk, makeChunkedFile } from '@fairdatasociety/bmt-js'
 import { Promises, Strings, Files } from 'cafe-utility'
 import { MantarayNode, Reference } from 'mantaray-js'
 import { TextEncoder } from 'util'
@@ -134,23 +134,17 @@ interface Queue {
     enqueue(fn: () => Promise<void>): void;
 }
 
-function getSpanValue(span: Uint8Array): bigint {
-    const dataView = new DataView(span.buffer)
-  
-    return dataView.getBigUint64(0, true)
-}
-
 const CHUNK_PAYLOAD_SIZE = 4096
 
 function makeNextLevelChunks(intermediateChunks: Chunk[]): Chunk[] {
     const parentChunks: Chunk[] = []
     let parentChunkPayload = new Uint8Array(CHUNK_PAYLOAD_SIZE)
     let offset = 0
-    let size = BigInt(0)
-    
+    let size = 0
+
     for (let i = 0; i < intermediateChunks.length; i++) {
         const chunk = intermediateChunks[i]
-        const address = chunk.address()        
+        const address = chunk.address()
         parentChunkPayload.set(address, offset)
         offset += address.length
         size += getSpanValue(chunk.span())
@@ -160,7 +154,7 @@ function makeNextLevelChunks(intermediateChunks: Chunk[]): Chunk[] {
             parentChunks.push(parentChunk)
             parentChunkPayload.fill(0)
             offset = 0
-            size = BigInt(0)
+            size = 0
         }
     }
 
@@ -172,7 +166,7 @@ async function streamedChunker(read: (size: number) => Promise<Uint8Array | null
     let intermediateChunkPayload = new Uint8Array(CHUNK_PAYLOAD_SIZE)
     let offset = 0
     let size = 0
-    
+
     while (true) {
         const payload = await read(CHUNK_PAYLOAD_SIZE)
         if (payload == null) {
@@ -184,7 +178,7 @@ async function streamedChunker(read: (size: number) => Promise<Uint8Array | null
         const chunk = makeChunk(payload)
         await onChunk(chunk)
 
-        const address = chunk.address()        
+        const address = chunk.address()
         intermediateChunkPayload.set(address, offset)
         offset += address.length
         size += payload.length
