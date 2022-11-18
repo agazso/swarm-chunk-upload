@@ -484,7 +484,7 @@ async function main() {
         deferred: false,
         retries: 5,
         parallelism: 50,
-        writeFiles: true,
+        writeFiles: false,
         onSuccessfulChunkUpload: async (chunk, context) => {
             // console.log('✅', `${context.beeUrl}/chunks/${toHexString(chunk.address())}`)
         },
