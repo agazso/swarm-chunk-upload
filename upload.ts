@@ -475,8 +475,8 @@ async function main() {
     const ref = await upload(process.argv[2], {
         stamp,
         beeUrl,
-        deferred: true,
-        retries: 1,
+        deferred: false,
+        retries: 5,
         parallelism: 50,
         writeFiles: true,
         onSuccessfulChunkUpload: async (chunk, context) => {
